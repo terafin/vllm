@@ -121,6 +121,7 @@ class CuMemAllocator:
         self.pointer_to_data: dict[int, AllocationData] = {}
         self.current_tag: str = CuMemAllocator.default_tag
         self.allocator_and_pools: dict[str, Any] = {}
+        self.sleeping = False
         # Creating strong references to the two callbacks here to prevent
         # these ephemeral bound-method objects being garbage collected.
         # See discussions in https://github.com/vllm-project/vllm/pull/22724
@@ -147,6 +148,9 @@ class CuMemAllocator:
         """
         Internal method to look up the allocation data
         when memory is freed in the memory pool."""
+        if self.sleeping:
+            self.pointer_to_data.pop(ptr, None)
+            return (0, 0, 0, 0)
         data = self.pointer_to_data.pop(ptr)
         if data.cpu_backup_tensor is not None:
             data.cpu_backup_tensor = None
@@ -187,6 +191,8 @@ class CuMemAllocator:
         backup_bytes = 0
 
         for ptr, data in self.pointer_to_data.items():
+            if not data.mapped:
+                continue
             handle = data.handle
             total_bytes += handle[1]
             if data.tag in offload_tags:
@@ -202,6 +208,7 @@ class CuMemAllocator:
                 libcudart.cudaMemcpy(cpu_ptr, ptr, size_in_bytes)
                 data.cpu_backup_tensor = cpu_backup_tensor
             unmap_and_release(handle)
+            data.mapped = False
 
         logger.info(
             "CuMemAllocator: sleep freed %.2f GiB memory in total, of which "
@@ -212,8 +219,9 @@ class CuMemAllocator:
             (total_bytes - backup_bytes) / 1024**3,
         )
 
-        gc.collect()
-        torch.cuda.empty_cache()
+        self.sleeping = True
+#        gc.collect()
+#        torch.cuda.empty_cache()
 
     def wake_up(self, tags: list[str] | None = None) -> None:
         """
@@ -228,8 +236,10 @@ class CuMemAllocator:
         """
         for ptr, data in self.pointer_to_data.items():
             if tags is None or data.tag in tags:
-                handle = data.handle
-                create_and_map(handle)
+                if not data.mapped:
+                    handle = data.handle
+                    create_and_map(handle)
+                    data.mapped = True
                 if data.cpu_backup_tensor is not None:
                     cpu_backup_tensor = data.cpu_backup_tensor
                     if cpu_backup_tensor is not None:
@@ -239,6 +249,7 @@ class CuMemAllocator:
                         cpu_ptr = cpu_backup_tensor.data_ptr()
                         libcudart.cudaMemcpy(ptr, cpu_ptr, size_in_bytes)
                         data.cpu_backup_tensor = None
+        self.sleeping = False
 
     @contextmanager
     def use_memory_pool(self, tag: str | None = None):
