@@ -798,18 +798,18 @@ class VllmConfig:
             "PYTORCH_CUDA_ALLOC_CONF", ""
         ):
             return
-        if self.model_config is not None and self.model_config.enable_cumem_allocator:
+        if self.model_config is not None and self.model_config.enable_cumem_kv_cache:
             return
 
         raise ValueError(
             f"KV connector {self.kv_transfer_config.kv_connector} is "
             "incompatible with PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True "
-            "unless the cumem allocator is enabled. PyTorch's CUDA VMM "
+            "unless cumem KV cache allocation is enabled. PyTorch's CUDA VMM "
             "allocator can remap KV cache virtual addresses to different "
             "physical pages, invalidating any pinned/registered KV memory "
             "(e.g. IB memory regions registered by NIXL or Mooncake). Either "
-            "unset expandable_segments:True or enable the cumem allocator "
-            "(--enable-cumem-allocator, on by default for CUDA/ROCm) which "
+            "unset expandable_segments:True or enable cumem KV cache "
+            "(--enable-cumem-kv-cache, on by default for CUDA/ROCm) which "
             "routes KV allocations through CuMemAllocator's pool, where "
             "expandable_segments is automatically disabled."
         )

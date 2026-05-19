@@ -250,7 +250,7 @@ def test_deep_sleep_async():
 @create_new_process_for_each_test("fork" if not current_platform.is_rocm() else "spawn")
 def test_cumem_without_sleep_mode():
     """Verify cumem allocator works independently of sleep mode."""
-    llm = LLM("hmellor/tiny-random-LlamaForCausalLM", enable_cumem_allocator=True)
+    llm = LLM("hmellor/tiny-random-LlamaForCausalLM", enable_cumem_kv_cache=True)
     prompt = "How are you?"
     sampling_params = SamplingParams(temperature=0, max_tokens=10)
     output = llm.generate(prompt, sampling_params)
@@ -261,11 +261,11 @@ def test_cumem_required_for_sleep():
     """Verify config validation rejects sleep mode without cumem."""
     from vllm.config.model import ModelConfig
 
-    with pytest.raises(ValueError, match="cumem allocator"):
+    with pytest.raises(ValueError, match="cumem KV cache"):
         ModelConfig(
             "hmellor/tiny-random-LlamaForCausalLM",
             enable_sleep_mode=True,
-            enable_cumem_allocator=False,
+            enable_cumem_kv_cache=False,
         )
 
 

@@ -295,10 +295,10 @@ class ModelConfig:
     enable_sleep_mode: bool = False
     """Enable sleep mode for the engine (only cuda and
     hip platforms are supported)."""
-    enable_cumem_allocator: bool | None = None
-    """Enable the cumem allocator for GPU memory management.
-    Defaults to True on CUDA and ROCm platforms. Required for
-    sleep mode and for fabric handle support (multi-node NVLink)."""
+    enable_cumem_kv_cache: bool | None = None
+    """Allocate KV cache through the cumem (CUDA VMM) allocator,
+    giving stable physical pages and fabric handle support.
+    Defaults to True on CUDA and ROCm platforms."""
     model_impl: str | ModelImpl = "auto"
     """Which implementation of the model to use:
 
@@ -517,12 +517,12 @@ class ModelConfig:
         if self.enable_sleep_mode and not current_platform.is_sleep_mode_available():
             raise ValueError("Sleep mode is not supported on current platform.")
 
-        if self.enable_cumem_allocator is None:
-            self.enable_cumem_allocator = current_platform.is_sleep_mode_available()
-        if self.enable_sleep_mode and not self.enable_cumem_allocator:
+        if self.enable_cumem_kv_cache is None:
+            self.enable_cumem_kv_cache = current_platform.is_sleep_mode_available()
+        if self.enable_sleep_mode and not self.enable_cumem_kv_cache:
             raise ValueError(
-                "Sleep mode requires the cumem allocator. "
-                "Remove --no-enable-cumem-allocator to use sleep mode."
+                "Sleep mode requires the cumem KV cache allocator. "
+                "Remove --no-enable-cumem-kv-cache to use sleep mode."
             )
 
         hf_config = get_config(

@@ -199,12 +199,16 @@ class Worker(WorkerBase):
             self.model_runner.post_kv_cache_wake_up()
 
     def _maybe_get_memory_pool_context(self, tag: str) -> AbstractContextManager:
-        if not self.vllm_config.model_config.enable_cumem_allocator:
+        if not self.vllm_config.model_config.enable_sleep_mode:
             return nullcontext()
 
         from vllm.device_allocator.cumem import CuMemAllocator
 
         allocator = CuMemAllocator.get_instance()
+        if tag == "weights":
+            assert allocator.get_current_usage() == 0, (
+                "Sleep mode can only be used for one instance per process."
+            )
         return allocator.use_memory_pool(tag=tag)
 
     @contextmanager
@@ -546,7 +550,7 @@ class Worker(WorkerBase):
         # related to kv cache connector (e.g. kv cache sharing layers).
         ensure_kv_transfer_initialized(self.vllm_config, kv_cache_config)
 
-        if self.vllm_config.model_config.enable_cumem_allocator:
+        if self.vllm_config.model_config.enable_cumem_kv_cache:
             from vllm.device_allocator.cumem import CuMemAllocator
 
             allocator = CuMemAllocator.get_instance()
