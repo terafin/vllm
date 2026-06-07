@@ -1,0 +1,144 @@
+name: Build overlay → GHCR
+
+# Build a thin overlay image: official vllm/vllm-openai:<tag> + this branch's
+# vllm/**/*.py changes vs upstream/main. Used to ship intarweb-proposed patches
+# as deployable images BEFORE upstream merges them.
+#
+# Triggers:
+#   - push to `intarweb-*`, `intarweb/**`, `fix/**`, `test/**` branches
+#   - workflow_dispatch (specify any branch + optional base tag)
+#
+# Output tags on ghcr.io/intarweb/vllm-openai:
+#   - intarweb-<branch-slug>-<sha7>   (immutable, pinnable)
+#   - intarweb-<branch-slug>          (moves with branch HEAD)
+#
+# Does NOT touch :latest. The mirror cron (fork-publish.yml) owns :latest and
+# keeps it byte-identical to Docker Hub upstream.
+
+on:
+  push:
+    branches:
+      - 'intarweb-*'
+      - 'intarweb/**'
+      - 'fix/**'
+      - 'test/**'
+  workflow_dispatch:
+    inputs:
+      base_image_tag:
+        description: 'vllm/vllm-openai tag to overlay onto (default: v0.22.1)'
+        required: false
+        default: 'v0.22.1'
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/vllm-openai
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 🏷️ Compute tags
+        id: tags
+        run: |
+          set -euo pipefail
+          BRANCH_SLUG="$(echo "${GITHUB_REF_NAME}" | tr '/' '-' | tr -cd 'a-zA-Z0-9.-' | cut -c 1-80)"
+          SHA_SHORT="${GITHUB_SHA:0:7}"
+          BASE_TAG="${{ inputs.base_image_tag || 'v0.22.1' }}"
+          echo "branch_slug=${BRANCH_SLUG}" >> "$GITHUB_OUTPUT"
+          echo "sha_short=${SHA_SHORT}" >> "$GITHUB_OUTPUT"
+          echo "base_tag=${BASE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "moving_tag=intarweb-${BRANCH_SLUG}" >> "$GITHUB_OUTPUT"
+          echo "pinned_tag=intarweb-${BRANCH_SLUG}-${SHA_SHORT}" >> "$GITHUB_OUTPUT"
+          echo "Tags:"
+          echo "  moving:  ${IMAGE}:intarweb-${BRANCH_SLUG}"
+          echo "  pinned:  ${IMAGE}:intarweb-${BRANCH_SLUG}-${SHA_SHORT}"
+          echo "  base:    vllm/vllm-openai:${BASE_TAG}"
+
+      - name: 📦 Build patches/ tree from diff vs upstream/main
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/vllm-project/vllm.git
+          git fetch --depth=1 upstream main
+          MERGE_BASE="$(git merge-base HEAD upstream/main)"
+          echo "merge-base: ${MERGE_BASE}"
+
+          # Only Python files under vllm/ — overlay is unsafe for non-Python changes.
+          mapfile -t CHANGED < <(git diff --name-only --diff-filter=AM "${MERGE_BASE}" HEAD -- 'vllm/**/*.py')
+          if [ "${#CHANGED[@]}" -eq 0 ]; then
+            echo "::error::No vllm/**/*.py changes vs upstream/main on this branch — nothing to overlay."
+            exit 1
+          fi
+
+          # Loud warn if branch touches non-overlay-safe files (CUDA, build, headers).
+          mapfile -t UNSAFE < <(git diff --name-only --diff-filter=AM "${MERGE_BASE}" HEAD \
+            -- '*.cu' '*.cuh' '*.cpp' '*.cc' '*.c' '*.h' '*.hpp' \
+               'CMakeLists.txt' 'setup.py' 'pyproject.toml' 'requirements*.txt')
+          if [ "${#UNSAFE[@]}" -gt 0 ]; then
+            echo "::warning::This branch modifies files OUTSIDE the overlay-safe path."
+            echo "::warning::These changes will NOT take effect in the overlay image:"
+            for f in "${UNSAFE[@]}"; do
+              echo "::warning::  ${f}"
+            done
+          fi
+
+          mkdir -p patches
+          echo "Files in overlay:"
+          for f in "${CHANGED[@]}"; do
+            echo "  ${f}"
+            mkdir -p "patches/$(dirname "$f")"
+            cp "$f" "patches/$f"
+          done
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🚀 Build & push overlay
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.overlay
+          build-args: |
+            BASE_IMAGE=vllm/vllm-openai:${{ steps.tags.outputs.base_tag }}
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.tags.outputs.pinned_tag }}
+            ${{ env.IMAGE }}:${{ steps.tags.outputs.moving_tag }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository_owner }}/vllm
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.description=intarweb overlay onto vllm/vllm-openai:${{ steps.tags.outputs.base_tag }} — branch ${{ github.ref_name }}
+
+      - name: 📋 Summary
+        run: |
+          {
+            echo "## Overlay build complete"
+            echo ""
+            echo "**Base:** \`vllm/vllm-openai:${{ steps.tags.outputs.base_tag }}\`"
+            echo "**Branch:** \`${GITHUB_REF_NAME}\`"
+            echo "**Commit:** \`${GITHUB_SHA}\`"
+            echo ""
+            echo "### Pull"
+            echo ""
+            echo "Pinned (immutable, recommended for prod pin):"
+            echo "\`\`\`"
+            echo "${{ env.IMAGE }}:${{ steps.tags.outputs.pinned_tag }}"
+            echo "\`\`\`"
+            echo ""
+            echo "Moving (follows branch HEAD):"
+            echo "\`\`\`"
+            echo "${{ env.IMAGE }}:${{ steps.tags.outputs.moving_tag }}"
+            echo "\`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"

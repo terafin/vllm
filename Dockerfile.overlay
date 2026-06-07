@@ -1,0 +1,33 @@
+# Overlay build — apply branch-local vllm/**/*.py changes onto the official
+# vllm/vllm-openai image without rebuilding CUDA kernels.
+#
+# How it works:
+#   - The CI workflow computes `git diff` between this branch and upstream/main,
+#     copies just the changed `vllm/**/*.py` files into a `patches/` tree.
+#   - That tree is COPY'd into the running image, replacing the matching files
+#     under the installed package.
+#
+# Only Python overlays. If a branch touches .cu/.cpp/.h or build files, the
+# diff filter in the workflow drops them and this image will be subtly wrong —
+# fail loud locally before relying on this for those branches.
+
+ARG BASE_IMAGE=vllm/vllm-openai:v0.22.1
+FROM ${BASE_IMAGE}
+
+# Path inside the official image — probed 2026-06-07 against v0.22.1.
+# If upstream changes the Python version, the discovery fallback below catches it.
+ARG VLLM_INSTALL=/usr/local/lib/python3.12/dist-packages/vllm
+
+COPY patches/vllm /tmp/patches/vllm
+
+RUN set -ex && \
+    if [ ! -d "${VLLM_INSTALL}" ]; then \
+      VLLM_INSTALL="$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')"; \
+      echo "VLLM_INSTALL hint was wrong; discovered: ${VLLM_INSTALL}"; \
+    fi && \
+    cp -rv /tmp/patches/vllm/. "${VLLM_INSTALL}/" && \
+    rm -rf /tmp/patches && \
+    python3 -c 'import vllm; print("✓ vllm overlay applied; version:", vllm.__version__)'
+
+LABEL org.opencontainers.image.source="https://github.com/intarweb/vllm"
+LABEL org.opencontainers.image.description="vLLM overlay build — official image + intarweb branch patches"
