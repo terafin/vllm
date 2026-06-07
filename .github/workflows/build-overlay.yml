@@ -66,8 +66,16 @@ jobs:
         run: |
           set -euo pipefail
           git remote add upstream https://github.com/vllm-project/vllm.git
-          git fetch --depth=1 upstream main
-          MERGE_BASE="$(git merge-base HEAD upstream/main)"
+          # Need enough upstream history that `git merge-base` can find the common
+          # ancestor with our branch. Depth=1 fails — only the tip commit is fetched.
+          # Depth=500 covers many weeks of upstream activity (vllm pushes ~10/day).
+          git fetch --depth=500 upstream main
+          MERGE_BASE="$(git merge-base HEAD upstream/main || true)"
+          if [ -z "${MERGE_BASE}" ]; then
+            echo "::warning::shallow merge-base failed; deepening upstream fetch..."
+            git fetch --deepen=2000 upstream main
+            MERGE_BASE="$(git merge-base HEAD upstream/main)"
+          fi
           echo "merge-base: ${MERGE_BASE}"
 
           # Only Python files under vllm/ — overlay is unsafe for non-Python changes.
