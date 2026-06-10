@@ -79,7 +79,7 @@ jobs:
           echo "merge-base: ${MERGE_BASE}"
 
           # Only Python files under vllm/ — overlay is unsafe for non-Python changes.
-          mapfile -t CHANGED < <(git diff --name-only --diff-filter=AM "${MERGE_BASE}" HEAD -- 'vllm/**/*.py')
+          mapfile -t CHANGED < <(git diff --name-only --diff-filter=AM "${MERGE_BASE}" HEAD -- 'vllm/*.py' 'vllm/**/*.py')
           if [ "${#CHANGED[@]}" -eq 0 ]; then
             echo "::error::No vllm/**/*.py changes vs upstream/main on this branch — nothing to overlay."
             exit 1
