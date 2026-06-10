@@ -85,6 +85,29 @@ jobs:
             exit 1
           fi
 
+          # ── COMPLETENESS GATE (regression-proof) ──────────────────────────
+          # Re-derive the touched set using the BROAD raw diff (no pathspec
+          # filter at all). If the workflow's pathspec-filtered CHANGED set
+          # diverges from it for any vllm/*.py path, the workflow's filter
+          # dropped files — the EXACT bug that silently broke r2-0311414
+          # (envs.py drop). Fail loud before building, with the dropped
+          # filenames.
+          mapfile -t TOUCHED_ALL < <(git diff --name-only --diff-filter=AM "${MERGE_BASE}" HEAD | grep -E '^vllm/.*\.py$' || true)
+          DROPPED=()
+          for f in "${TOUCHED_ALL[@]}"; do
+            in_changed=0
+            for c in "${CHANGED[@]}"; do [ "$f" = "$c" ] && in_changed=1 && break; done
+            (( in_changed )) || DROPPED+=("$f")
+          done
+          if (( ${#DROPPED[@]} > 0 )); then
+            echo "::error::COMPLETENESS GATE FAIL — workflow pathspec dropped these vllm/*.py files:"
+            for f in "${DROPPED[@]}"; do echo "::error::  ${f}"; done
+            echo "::error::Fix the pathspec on the diff filter (line above) before merging."
+            exit 1
+          fi
+          echo "✓ completeness gate: touched-set (${#TOUCHED_ALL[@]}) == captured-set (${#CHANGED[@]})"
+
+
           # Loud warn if branch touches non-overlay-safe files (CUDA, build, headers).
           mapfile -t UNSAFE < <(git diff --name-only --diff-filter=AM "${MERGE_BASE}" HEAD \
             -- '*.cu' '*.cuh' '*.cpp' '*.cc' '*.c' '*.h' '*.hpp' \
