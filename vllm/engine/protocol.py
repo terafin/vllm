@@ -133,24 +133,19 @@ class EngineClient(ABC):
         """Raise if unhealthy"""
         ...
 
-    async def get_decode_liveness(
-        self,
-    ) -> tuple[int, float | None, float | None]:
+    async def get_decode_liveness(self) -> tuple[int, float | None]:
         """Return engine forward-progress liveness, used by /health/decode.
 
-        Returns ``(num_running_reqs, last_token_age_seconds,
-        last_prefill_age_seconds)``. Both ages are ``None`` if the
-        corresponding signal has never been observed (no decoded token
-        ever / no prefill compute ever).
+        Returns ``(num_running_reqs, last_token_age_seconds)``. The age is
+        ``None`` if no decoded token has ever been observed.
 
-        Default implementation returns ``(0, None, None)`` — i.e. the
-        engine always reports as "idle" — which makes the endpoint
-        always return 200 OK with status="idle" and is safe for engine
-        implementations that don't (yet) track per-step token emission
-        timestamps. Override in concrete engines that have the data
-        available.
+        Default implementation returns ``(0, None)`` — i.e. the engine
+        always reports as "idle" — which makes the endpoint always return
+        200 OK with status="idle" and is safe for engine implementations
+        that don't (yet) track per-step token emission timestamps.
+        Override in concrete engines that have the data available.
         """
-        return 0, None, None
+        return 0, None
 
     @abstractmethod
     async def start_profile(self) -> None:
