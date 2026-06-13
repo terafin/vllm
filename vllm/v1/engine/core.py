@@ -807,6 +807,14 @@ class EngineCore:
         if not self.model_executor.is_sleeping:
             self.resume_scheduler()
 
+        # Update the tracked sleep level. A full wake (tags=None) drops
+        # us back to None. A partial wake (tags set) only clears the
+        # tracked level if the executor reports no remaining sleeping
+        # tags — otherwise we still hold *some* offloaded state and the
+        # level is unchanged from the caller's perspective.
+        if tags is None or not self.model_executor.is_sleeping:
+            self._current_sleep_level = None
+
     def is_sleeping(self) -> bool:
         """Check if engine is sleeping at any level."""
         return self.is_scheduler_paused() or self.model_executor.is_sleeping
