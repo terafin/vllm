@@ -380,56 +380,6 @@ class CuMemAllocator:
                     # on every step.
                     libcudart.cudaMemset(ptr, 0, data.handle[1])
 
-        # Block until all H2D restore copies complete before returning.
-        #
-        # `libcudart.cudaMemcpy` above is the *synchronous* variant w.r.t. the
-        # current thread, but on a multi-rank executor the per-worker
-        # `wake_up` calls land on different processes / streams. Without a
-        # final `torch.cuda.synchronize()` here, control returns to the
-        # caller (and ultimately the HTTP `/wake_up` 200) while the CUDA
-        # work queue may still hold pending cleanup or implicit-stream
-        # work tied to the restore. A subsequent rapid `/sleep` (a few
-        # seconds later in swap-group / RLHF-rotation / scale-to-zero
-        # patterns) then races those tail kernels and the
-        # offload-loop's `cudaMemcpy` reads from / `cuMemUnmap` invalidates
-        # a region the GPU's MMU still considers active → illegal memory
-        # access. Cost: a single device sync at the end of an already
-        # multi-second restore. See issue #45520 and the rapid
-        # sleep-after-wake postmortem for the failure trace.
-        if libcudart is not None:
-            torch.cuda.synchronize()
-
-        # Drain restore-memcpy work and align all ranks at the wake boundary
-        # BEFORE returning control to the caller (who will immediately drive
-        # NCCL P2P traffic against the freshly-remapped VAs). See
-        # ``_quiesce_distributed_before_vmm_mutation`` for rationale (#45519).
-        self._quiesce_distributed_before_vmm_mutation()
-
-        # Block until all H2D restore copies complete before returning.
-        #
-        # `libcudart.cudaMemcpy` above is the *synchronous* variant w.r.t. the
-        # current thread, but on a multi-rank executor the per-worker
-        # `wake_up` calls land on different processes / streams. Without a
-        # final `torch.cuda.synchronize()` here, control returns to the
-        # caller (and ultimately the HTTP `/wake_up` 200) while the CUDA
-        # work queue may still hold pending cleanup or implicit-stream
-        # work tied to the restore. A subsequent rapid `/sleep` (a few
-        # seconds later in swap-group / RLHF-rotation / scale-to-zero
-        # patterns) then races those tail kernels and the
-        # offload-loop's `cudaMemcpy` reads from / `cuMemUnmap` invalidates
-        # a region the GPU's MMU still considers active → illegal memory
-        # access. Cost: a single device sync at the end of an already
-        # multi-second restore. See issue #45520 and the rapid
-        # sleep-after-wake postmortem for the failure trace.
-        if libcudart is not None:
-            torch.cuda.synchronize()
-
-        # Drain restore-memcpy work and align all ranks at the wake boundary
-        # BEFORE returning control to the caller (who will immediately drive
-        # NCCL P2P traffic against the freshly-remapped VAs). See
-        # ``_quiesce_distributed_before_vmm_mutation`` for rationale (#45519).
-        self._quiesce_distributed_before_vmm_mutation()
-
     @contextmanager
     def use_memory_pool(self, tag: str | None = None):
         """
