@@ -289,29 +289,10 @@ class CuMemAllocator:
 
         assert isinstance(offload_tags, tuple)
 
-        # Drain in-flight CUDA kernels before any cuMemUnmap / D2H copy.
-        #
-        # The engine-level ``pause_scheduler`` aborts the *Python-side* request
-        # state but does not block on the CUDA stream — kernels already
-        # enqueued by `model_runner.execute_model` (decode steps, P2P sends,
-        # KV writes, the H2D `cudaMemcpy` from a prior `wake_up`) keep
-        # running asynchronously. If we start the offload/unmap loop while
-        # any of those kernels are still executing, the line-202
-        # `cudaMemcpy(cpu_ptr, ptr, size_in_bytes)` reads from a region the
-        # kernel is mid-write into, and `unmap_and_release(handle)`
-        # invalidates pages a kernel still holds — both surface as
-        # `cudaErrorIllegalAddress` / `CUDART error: an illegal memory
-        # access was encountered`, killing the engine.
-        #
-        # Refs:
-        #   * https://github.com/vllm-project/vllm/issues/45520
-        #     (/sleep + in-flight decode → illegal memory access)
-        #   * https://github.com/vllm-project/vllm/issues/36753
-        #     (POST /wake_up crash, same family)
-        #   * The symmetrical sync we already do in
-        #     `_python_free_callback` (line ~158) for the same reason.
-        if libcudart is not None:
-            torch.cuda.synchronize()
+        # Drain in-flight NCCL/CUDA work and align all ranks at the sleep
+        # boundary BEFORE we mutate any VMM mappings. See
+        # ``_quiesce_distributed_before_vmm_mutation`` for rationale (#45519).
+        self._quiesce_distributed_before_vmm_mutation()
 
         total_bytes = 0
         backup_bytes = 0
@@ -442,6 +423,12 @@ class CuMemAllocator:
         # sleep-after-wake postmortem for the failure trace.
         if libcudart is not None:
             torch.cuda.synchronize()
+
+        # Drain restore-memcpy work and align all ranks at the wake boundary
+        # BEFORE returning control to the caller (who will immediately drive
+        # NCCL P2P traffic against the freshly-remapped VAs). See
+        # ``_quiesce_distributed_before_vmm_mutation`` for rationale (#45519).
+        self._quiesce_distributed_before_vmm_mutation()
 
     @contextmanager
     def use_memory_pool(self, tag: str | None = None):
